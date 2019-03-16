@@ -1,25 +1,35 @@
 package gol
 
+import kotlinx.coroutines.*
 import processing.awt.PSurfaceAWT
 import processing.core.*
+import java.awt.Toolkit
 import javax.swing.JFrame
+import kotlin.coroutines.EmptyCoroutineContext
 
-class GameOfLife(private val boardWidth: Int = 100,
-                 private val boardHeight: Int = 100,
-                 private val cellSize: Int = 5,
-                 private val fps: Float = 30f) : PApplet() {
+class GameOfLife(
+    private val visibleBoardWidth: Int = Toolkit.getDefaultToolkit().screenSize.width,
+    private val visibleBoardHeight: Int = Toolkit.getDefaultToolkit().screenSize.height,
+    private val cellSize: Int = 5,
+    private val fps: Float = 15f,
+    private val actualBoardWidthCells: Int = 10000,
+    private val actualBoardHeightCells: Int = 10000
+) : PApplet(), CoroutineScope by CoroutineScope(EmptyCoroutineContext) {
 
     private val BLACK = color(0, 0, 0)
     private val WHITE = color(255, 255, 255)
 
-    private var grid = Array(boardHeight) { Array(boardWidth) { 0 } }
+    private val visibleBoardWidthCells = visibleBoardWidth / cellSize
+    private val visibleBoardHeightCells = visibleBoardHeight / cellSize
 
-    init {
-        grid[5][5] = 1
-    }
+    private var visibleBoardCellY = visibleBoardHeightCells / 2
+    private var visibleBoardCellX = visibleBoardWidthCells / 2
+
+    private var grid =
+        Array(actualBoardHeightCells) { Array(actualBoardWidthCells) { if (Math.random() > 0.5) 1 else 0 } }
 
     override fun settings() {
-        size(boardWidth * cellSize - 1, boardHeight * cellSize - 1)
+        size(visibleBoardWidth - 1, visibleBoardHeight - 1)
     }
 
     override fun setup() {
@@ -27,74 +37,94 @@ class GameOfLife(private val boardWidth: Int = 100,
         colorMode(RGB)
     }
 
+    init {
+        kotlin.concurrent.thread {
+            runBlocking {
+                while (true) {
+                    setNextGeneration()
+                }
+            }
+        }
+    }
+
     override fun draw() {
-
-        setNextGeneration()
-
         background(WHITE)
-
         displayGeneration()
     }
 
     override fun mouseDragged() {
-        grid[r(mouseY / cellSize)][c(mouseX / cellSize)] = 1
+        grid[r(visibleBoardCellY + mouseY / cellSize)][c(visibleBoardCellX + mouseX / cellSize)] = 1
     }
 
     private fun displayGeneration() {
-
         stroke(BLACK)
         fill(BLACK)
 
-        grid.forEachIndexed { row, cols->
-            cols.forEachIndexed { col, _ ->
-                if (grid[row][col] == 1) {
-                    rect(col * cellSize.toFloat(), row * cellSize.toFloat(), cellSize.toFloat(), cellSize.toFloat())
+        for (row: Int in visibleBoardCellY until visibleBoardCellY + visibleBoardHeightCells) {
+            for (col: Int in visibleBoardCellX until visibleBoardCellX + visibleBoardWidthCells) {
+                if (grid[row % actualBoardHeightCells][col % actualBoardWidthCells] == 1) {
+                    rect(
+                        (col - visibleBoardCellX) * cellSize.toFloat(),
+                        (row - visibleBoardCellY) * cellSize.toFloat(),
+                        cellSize.toFloat(),
+                        cellSize.toFloat()
+                    )
                 }
             }
         }
     }
 
-    private fun setNextGeneration() {
+    private suspend fun setNextGeneration() {
+        val newGrid = Array(actualBoardHeightCells) { Array(actualBoardWidthCells) { 0 } }
 
-        val newGrid = Array(boardWidth) { Array(boardHeight) { 0 } }
+        val deferreds = mutableListOf<Deferred<Unit>>()
 
-        newGrid.forEachIndexed { row, cols ->
-            cols.forEachIndexed { col, _ ->
-                val numNeighbors = numberOfNeighbors(row, col)
-                when {
-                    grid[row][col] == 1 ->
-                        when {
-                            numNeighbors < 2 -> newGrid[row][col] = 0
-                            numNeighbors <= 3 -> newGrid[row][col] = 1
-                            else -> newGrid[row][col] = 0
+        for (row: Int in 0..actualBoardHeightCells step visibleBoardHeightCells) {
+            for (col: Int in 0..actualBoardWidthCells step visibleBoardWidthCells) {
+                deferreds += async {
+                    for (r: Int in row until min(row + visibleBoardHeightCells, actualBoardHeightCells)) {
+                        for (c: Int in col until min(col + visibleBoardWidthCells, actualBoardWidthCells)) {
+                            val numNeighbors = numberOfNeighbors(r, c)
+                            when {
+                                grid[r][c] == 1 ->
+                                    when {
+                                        numNeighbors < 2 -> newGrid[r][c] = 0
+                                        numNeighbors <= 3 -> newGrid[r][c] = 1
+                                        else -> newGrid[r][c] = 0
+                                    }
+                                numNeighbors == 3 -> newGrid[r][c] = 1
+                                else -> newGrid[r][c] = grid[r][c]
+                            }
                         }
-                    numNeighbors == 3 -> newGrid[row][col] = 1
-                    else -> newGrid[row][col] = grid[row][col]
+                    }
                 }
             }
         }
+
+        deferreds.forEach { it.await() }
 
         grid = newGrid
     }
 
     private fun r(row: Int): Int {
-        val x = row % boardHeight
-        return if (x >= 0) x else x + boardHeight
+        val x = row % visibleBoardHeightCells
+        return if (x >= 0) x else x + visibleBoardHeightCells
     }
+
     private fun c(col: Int): Int {
-        val x = col % boardWidth
-        return if (x >= 0) x else x + boardWidth
+        val x = col % visibleBoardWidthCells
+        return if (x >= 0) x else x + visibleBoardWidthCells
     }
 
     private fun numberOfNeighbors(row: Int, col: Int): Int {
-        return  grid[r(row - 1)][c(col - 1)] + grid[r(row - 1)][c(col)] + grid[r(row - 1)][c(col + 1)] +
-                grid[r(row)][c(col - 1)] +                                          grid[r(row)][c(col + 1)] +
+        return grid[r(row - 1)][c(col - 1)] + grid[r(row - 1)][c(col)] + grid[r(row - 1)][c(col + 1)] +
+                grid[r(row)][c(col - 1)] + grid[r(row)][c(col + 1)] +
                 grid[r(row + 1)][c(col - 1)] + grid[r(row + 1)][c(col)] + grid[r(row + 1)][c(col + 1)]
     }
 
-    fun initSurfaze(): PSurface {
+    fun initializeSurface(): PSurface {
         val ps = initSurface()
-        ps.setSize(boardWidth * cellSize, boardHeight * cellSize)
+        ps.setSize(visibleBoardWidth, visibleBoardHeight)
         return ps
     }
 
@@ -107,7 +137,7 @@ fun main(args: Array<String>) {
 
     val gol = GameOfLife()
 
-    val golPs = gol.initSurfaze()
+    val golPs = gol.initializeSurface()
 
     val smoothCanvas = golPs.native as PSurfaceAWT.SmoothCanvas
 
