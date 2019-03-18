@@ -11,9 +11,9 @@ class GameOfLife(
     private val visibleBoardWidth: Int = Toolkit.getDefaultToolkit().screenSize.width,
     private val visibleBoardHeight: Int = Toolkit.getDefaultToolkit().screenSize.height,
     private val cellSize: Int = 5,
-    private val fps: Float = 15f,
-    private val actualBoardWidthCells: Int = 10000,
-    private val actualBoardHeightCells: Int = 10000
+    private val fps: Float = 30f,
+    private val actualBoardWidthCells: Int = 5000,
+    private val actualBoardHeightCells: Int = 5000
 ) : PApplet(), CoroutineScope by CoroutineScope(EmptyCoroutineContext) {
 
     private val BLACK = color(0, 0, 0)
@@ -26,7 +26,7 @@ class GameOfLife(
     private var visibleBoardCellX = visibleBoardWidthCells / 2
 
     private var grid =
-        Array(actualBoardHeightCells) { Array(actualBoardWidthCells) { if (Math.random() > 0.5) 1 else 0 } }
+        Array(actualBoardHeightCells) { Array(actualBoardWidthCells) { /*if (Math.random() > 0.5) 1 else 0*/ 0 } }
 
     override fun settings() {
         size(visibleBoardWidth - 1, visibleBoardHeight - 1)
@@ -37,18 +37,9 @@ class GameOfLife(
         colorMode(RGB)
     }
 
-    init {
-        kotlin.concurrent.thread {
-            runBlocking {
-                while (true) {
-                    setNextGeneration()
-                }
-            }
-        }
-    }
-
     override fun draw() {
         background(WHITE)
+        setNextGeneration()
         displayGeneration()
     }
 
@@ -56,32 +47,45 @@ class GameOfLife(
         grid[r(visibleBoardCellY + mouseY / cellSize)][c(visibleBoardCellX + mouseX / cellSize)] = 1
     }
 
+    override fun keyPressed() {
+        if (key.toInt() == CODED) {
+            when (keyCode) {
+                UP -> visibleBoardCellY--
+                DOWN -> visibleBoardCellY++
+                LEFT -> visibleBoardCellX--
+                RIGHT -> visibleBoardCellX++
+            }
+        }
+    }
+
     private fun displayGeneration() {
         stroke(BLACK)
         fill(BLACK)
 
-        for (row: Int in visibleBoardCellY until visibleBoardCellY + visibleBoardHeightCells) {
-            for (col: Int in visibleBoardCellX until visibleBoardCellX + visibleBoardWidthCells) {
-                if (grid[row % actualBoardHeightCells][col % actualBoardWidthCells] == 1) {
-                    rect(
-                        (col - visibleBoardCellX) * cellSize.toFloat(),
-                        (row - visibleBoardCellY) * cellSize.toFloat(),
-                        cellSize.toFloat(),
-                        cellSize.toFloat()
-                    )
+        synchronized(grid) {
+            for (row: Int in visibleBoardCellY until visibleBoardCellY + visibleBoardHeightCells) {
+                for (col: Int in visibleBoardCellX until visibleBoardCellX + visibleBoardWidthCells) {
+                    if (grid[r(row)][c(col)] == 1) {
+                        rect(
+                            (col - visibleBoardCellX) * cellSize.toFloat(),
+                            (row - visibleBoardCellY) * cellSize.toFloat(),
+                            cellSize.toFloat(),
+                            cellSize.toFloat()
+                        )
+                    }
                 }
             }
         }
     }
 
-    private suspend fun setNextGeneration() {
+    private fun setNextGeneration() {
         val newGrid = Array(actualBoardHeightCells) { Array(actualBoardWidthCells) { 0 } }
 
-        val deferreds = mutableListOf<Deferred<Unit>>()
+        val threads = mutableListOf<Thread>()
 
-        for (row: Int in 0..actualBoardHeightCells step visibleBoardHeightCells) {
-            for (col: Int in 0..actualBoardWidthCells step visibleBoardWidthCells) {
-                deferreds += async {
+        for (row: Int in 0 until actualBoardHeightCells step visibleBoardHeightCells) {
+            for (col: Int in 0 until actualBoardWidthCells step visibleBoardWidthCells) {
+                threads += kotlin.concurrent.thread {
                     for (r: Int in row until min(row + visibleBoardHeightCells, actualBoardHeightCells)) {
                         for (c: Int in col until min(col + visibleBoardWidthCells, actualBoardWidthCells)) {
                             val numNeighbors = numberOfNeighbors(r, c)
@@ -101,19 +105,21 @@ class GameOfLife(
             }
         }
 
-        deferreds.forEach { it.await() }
+        while(threads.any { it.state != Thread.State.TERMINATED }) {  }
 
-        grid = newGrid
+        synchronized(grid) {
+            grid = newGrid
+        }
     }
 
     private fun r(row: Int): Int {
-        val x = row % visibleBoardHeightCells
-        return if (x >= 0) x else x + visibleBoardHeightCells
+        val x = row % actualBoardHeightCells
+        return if (x >= 0) x else x + actualBoardHeightCells
     }
 
     private fun c(col: Int): Int {
-        val x = col % visibleBoardWidthCells
-        return if (x >= 0) x else x + visibleBoardWidthCells
+        val x = col % actualBoardWidthCells
+        return if (x >= 0) x else x + actualBoardWidthCells
     }
 
     private fun numberOfNeighbors(row: Int, col: Int): Int {
@@ -146,7 +152,6 @@ fun main(args: Array<String>) {
     frame.pack()
     frame.isVisible = true
 
-    //start your sketch
     golPs.startThread()
 }
 
